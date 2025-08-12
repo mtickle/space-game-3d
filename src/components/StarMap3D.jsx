@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
-import SystemDetailPanel from './SystemDetailPanel'; // Import the component
+import { createFlareTexture, createGlowTexture, createSeamlessStarTexture } from '../utils/textureUtils';
+import SystemDetailPanel from './SystemDetailPanel';
 
-const SECTOR_SIZE = 500; // This MUST match your API's SECTOR_SIZE
+const SECTOR_SIZE = 500;
 
 const StarMap3D = () => {
     const mountRef = useRef(null);
@@ -17,7 +18,8 @@ const StarMap3D = () => {
     const rendererRef = useRef(null);
     const controlsRef = useRef(null);
     const starMeshes = useRef([]);
-    const planetMeshes = useRef([]); // --- NEW: Ref to hold planet meshes
+    const planetMeshes = useRef([]);
+    const orbitLines = useRef([]);
     const loadedSectors = useRef(new Set());
     const animationFrameId = useRef(null);
     const lastCameraPosition = useRef(new THREE.Vector3());
@@ -44,7 +46,6 @@ const StarMap3D = () => {
 
     const fetchSystemDetails = useCallback(async (star) => {
         if (!star || !star.id) return;
-        console.log(`Fetching details for ${star.name}...`);
         try {
             const apiKey = import.meta.env.VITE_API_KEY;
             const baseUrl = import.meta.env.VITE_API_BASE_URL;
@@ -61,10 +62,8 @@ const StarMap3D = () => {
             }
 
             if (!response.ok) throw new Error('Failed to fetch or create system details');
-
             const fullSystem = await response.json();
             setActiveSystemDetails(fullSystem);
-
         } catch (error) {
             console.error(error);
         }
@@ -83,6 +82,11 @@ const StarMap3D = () => {
         renderer.setSize(window.innerWidth, window.innerHeight);
         mountRef.current.appendChild(renderer.domElement);
 
+        // --- FIX: Add an ambient light to the scene ---
+        // This provides a soft, global light so planets are not black.
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.2);
+        scene.add(ambientLight);
+
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
         controls.zoomSpeed = 2.5;
@@ -91,20 +95,27 @@ const StarMap3D = () => {
         scene.add(createStarfield());
         camera.position.z = 100;
 
-        const clock = new THREE.Clock(); // --- NEW: Clock for smooth animation
+        const clock = new THREE.Clock();
 
         const animate = () => {
             animationFrameId.current = requestAnimationFrame(animate);
+            const delta = clock.getDelta();
 
-            const delta = clock.getDelta(); // Time since last frame
+            starMeshes.current.forEach(starMesh => {
+                starMesh.rotation.y += 0.05 * delta;
+                if (starMesh.parent) {
+                    const flare = starMesh.parent.children.find(c => c.userData?.isFlare);
+                    if (flare) flare.rotation.y -= 0.02 * delta;
+                }
+            });
 
-            // --- NEW: Animate Planets ---
             planetMeshes.current.forEach(planet => {
-                planet.userData.angle += planet.userData.speed * delta * 10; // Use delta for frame-rate independence
+                planet.userData.angle += planet.userData.speed * delta;
                 const starPos = planet.userData.starPosition;
                 planet.position.x = starPos.x + Math.cos(planet.userData.angle) * planet.userData.orbitRadius;
+                planet.position.y = starPos.y;
                 planet.position.z = starPos.z + Math.sin(planet.userData.angle) * planet.userData.orbitRadius;
-                planet.rotation.y += 0.005;
+                planet.rotation.y += 0.05;
             });
 
             controls.update();
@@ -195,26 +206,40 @@ const StarMap3D = () => {
         newStars.forEach(starData => {
             const starGroup = new THREE.Group();
             const starGeometry = new THREE.SphereGeometry(starData.size, 32, 32);
-            const starMaterial = new THREE.MeshBasicMaterial({ color: starData.color });
+            const starMaterial = new THREE.MeshBasicMaterial({
+                map: createSeamlessStarTexture(starData.color),
+            });
             const starMesh = new THREE.Mesh(starGeometry, starMaterial);
             starMesh.userData = starData;
+
+            const flareGeometry = new THREE.SphereGeometry(starData.size * 1.3, 32, 32);
+            const flareMaterial = new THREE.MeshBasicMaterial({
+                map: createFlareTexture(),
+                transparent: true,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+                side: THREE.DoubleSide
+            });
+            const flareMesh = new THREE.Mesh(flareGeometry, flareMaterial);
+            flareMesh.userData.isFlare = true;
 
             const glowSprite = new THREE.Sprite(new THREE.SpriteMaterial({
                 map: createGlowTexture(starData.color),
                 transparent: true,
-                blending: THREE.AdditiveBlending,
+                blending: THREE.AdditiveBlending
             }));
             glowSprite.scale.set(starData.size * 3, starData.size * 3, 1);
 
             const light = new THREE.PointLight(starData.color, 2, 150);
 
-            starGroup.add(starMesh, glowSprite, light);
+            starGroup.add(starMesh, flareMesh, glowSprite, light);
             starGroup.position.set(starData.x, starData.y, starData.z);
 
             scene.add(starGroup);
             starMeshes.current.push(starMesh);
         });
     }, [stars]);
+
 
     useEffect(() => {
         const camera = cameraRef.current;
@@ -223,7 +248,7 @@ const StarMap3D = () => {
         if (selectedStar && camera && controls) {
             fetchSystemDetails(selectedStar);
             const targetPosition = new THREE.Vector3(selectedStar.x, selectedStar.y, selectedStar.z);
-            const cameraTargetPosition = targetPosition.clone().add(new THREE.Vector3(-20, 5, selectedStar.size * 8));
+            const cameraTargetPosition = targetPosition.clone().add(new THREE.Vector3(0, 80, 50));
             const startPosition = camera.position.clone();
             const startTarget = controls.target.clone();
             let t = 0;
@@ -241,20 +266,21 @@ const StarMap3D = () => {
         }
     }, [selectedStar, fetchSystemDetails]);
 
-    // --- NEW: Create and remove planets when a system is selected/deselected ---
     useEffect(() => {
         const scene = sceneRef.current;
         if (!scene) return;
 
-        // Clear any old planets from the scene
-        planetMeshes.current.forEach(planet => scene.remove(planet));
+        planetMeshes.current.forEach(planetMesh => scene.remove(planetMesh));
         planetMeshes.current = [];
+        orbitLines.current.forEach(line => scene.remove(line));
+        orbitLines.current = [];
 
-        if (activeSystemDetails && activeSystemDetails.planets) {
-            const starPosition = new THREE.Vector3(activeSystemDetails.starX, activeSystemDetails.starY, activeSystemDetails.starZ);
+        if (activeSystemDetails && activeSystemDetails.planets && selectedStar) {
+            const starPosition = new THREE.Vector3(selectedStar.x, selectedStar.y, selectedStar.z);
 
             activeSystemDetails.planets.forEach(planetData => {
-                const planetGeometry = new THREE.SphereGeometry(planetData.planetSize * 0.2, 32, 32); // Scale planets down
+                const orbitRadius = planetData.orbitRadius * 1.5;
+                const planetGeometry = new THREE.SphereGeometry(planetData.planetSize * 0.2, 16, 16);
                 const planetMaterial = new THREE.MeshStandardMaterial({
                     color: planetData.planetColor,
                     roughness: 0.8,
@@ -262,19 +288,28 @@ const StarMap3D = () => {
                 });
                 const planetMesh = new THREE.Mesh(planetGeometry, planetMaterial);
 
-                // Store data needed for animation
                 planetMesh.userData = {
-                    orbitRadius: planetData.orbitRadius * 0.5, // Scale orbit down
-                    speed: Math.random() * 0.5 + 0.1,
+                    orbitRadius: orbitRadius,
+                    speed: (Math.random() * 0.2 + 0.05) / (orbitRadius / 50),
                     angle: Math.random() * Math.PI * 2,
                     starPosition: starPosition
                 };
 
+                const orbitGeometry = new THREE.BufferGeometry().setFromPoints(
+                    new THREE.Path().absarc(0, 0, orbitRadius, 0, Math.PI * 2, false).getSpacedPoints(128)
+                );
+                const orbitMaterial = new THREE.LineBasicMaterial({ color: 0x444444 });
+                const orbitLine = new THREE.Line(orbitGeometry, orbitMaterial);
+                orbitLine.position.copy(starPosition);
+                orbitLine.rotation.x = Math.PI / 2;
+
+                scene.add(orbitLine);
                 scene.add(planetMesh);
+                orbitLines.current.push(orbitLine);
                 planetMeshes.current.push(planetMesh);
             });
         }
-    }, [activeSystemDetails]);
+    }, [activeSystemDetails, selectedStar]);
 
     const returnToGalaxyView = () => {
         setSelectedStar(null);
@@ -300,21 +335,6 @@ const StarMap3D = () => {
         }
     };
 
-    function createGlowTexture(color) {
-        const canvas = document.createElement('canvas');
-        canvas.width = 128;
-        canvas.height = 128;
-        const context = canvas.getContext('2d');
-        const gradient = context.createRadialGradient(64, 64, 0, 64, 64, 64);
-        const starColor = new THREE.Color(color);
-        gradient.addColorStop(0.0, 'rgba(255, 255, 255, 0.8)');
-        gradient.addColorStop(0.3, `rgba(${starColor.r * 255}, ${starColor.g * 255}, ${starColor.b * 255}, 0.5)`);
-        gradient.addColorStop(1.0, 'rgba(0,0,0,0)');
-        context.fillStyle = gradient;
-        context.fillRect(0, 0, 128, 128);
-        return new THREE.CanvasTexture(canvas);
-    }
-
     function createStarfield() {
         const starVertices = [];
         for (let i = 0; i < 2000; i++) {
@@ -330,7 +350,7 @@ const StarMap3D = () => {
     }
 
     return (
-        <div style={{ position: 'relative', width: '200vw', height: '200vh' }}>
+        <div style={{ position: 'relative', width: '100vw', height: '100vh' }}>
             <div ref={mountRef} />
             {hoveredStar && (
                 <div style={{
