@@ -330,7 +330,7 @@ const StarMap3D = () => {
     }
 
     return (
-        <div style={{ position: 'relative', width: '100vw', height: '100vh' }}>
+        <div style={{ position: 'relative', width: '200vw', height: '200vh' }}>
             <div ref={mountRef} />
             {hoveredStar && (
                 <div style={{
