@@ -1,54 +1,42 @@
 
 const SystemDetailPanel = ({ system, onClose }) => {
-    if (!system) return null;
+    // Use a conditional class to slide the panel in and out
+    const panelClasses = system
+        ? 'transform-none'
+        : '-translate-x-full';
 
     return (
-        <div style={{
-            position: 'absolute',
-            top: '0',
-            left: '0',
-            width: '300px',
-            height: '100%',
-            backgroundColor: 'rgba(10, 10, 20, 0.85)',
-            color: 'white',
-            fontFamily: 'monospace',
-            padding: '20px',
-            overflowY: 'auto',
-            borderRight: '1px solid #444',
-            backdropFilter: 'blur(5px)',
-            transition: 'transform 0.5s ease-in-out',
-            transform: system ? 'translateX(0)' : 'translateX(-100%)',
-        }}>
-            <h2 style={{ fontSize: '1.5em', color: '#00ff88', marginBottom: '10px' }}>{system.starName}</h2>
-            <p style={{ fontSize: '0.8em', color: '#aaa', marginBottom: '20px' }}>{system.starDescription}</p>
+        <div
+            className={`absolute top-0 left-0 h-full w-80 bg-black/70 text-white font-mono p-5 border-r border-gray-700 backdrop-blur-sm overflow-y-auto transition-transform duration-500 ease-in-out ${panelClasses}`}
+        >
+            {system && (
+                <>
+                    <div>
+                        <h2 className="text-2xl font-bold text-cyan-400 mb-2">{system.starName}</h2>
+                        <p className="text-sm text-gray-400 mb-6">{system.starDescription}</p>
+                    </div>
 
-            <h3 style={{ borderBottom: '1px solid #444', paddingBottom: '5px', marginBottom: '10px' }}>Planets ({system.planets.length})</h3>
-            <ul style={{ listStyle: 'none', padding: 0 }}>
-                {system.planets.map(planet => (
-                    <li key={planet.planetId} style={{ marginBottom: '15px' }}>
-                        <strong style={{ color: planet.planetColor }}>{planet.planetName}</strong>
-                        <span style={{ fontSize: '0.8em', color: '#aaa', marginLeft: '10px' }}>({planet.planetType})</span>
-                        <p style={{ fontSize: '0.7em', margin: '5px 0 0 10px' }}>Moons: {planet.moons.length}</p>
-                    </li>
-                ))}
-            </ul>
-            <button
-                onClick={onClose}
-                style={{
-                    position: 'absolute',
-                    bottom: '20px',
-                    left: '20px',
-                    width: 'calc(100% - 40px)',
-                    padding: '10px',
-                    backgroundColor: 'rgba(0,0,0,0.7)',
-                    color: 'white',
-                    border: '1px solid white',
-                    borderRadius: '5px',
-                    cursor: 'pointer'
-                }}
-            >
-                Back to Galaxy
-            </button>
+                    <div>
+                        <h3 className="border-b border-gray-600 pb-2 mb-3 text-lg">Planets ({system.planets.length})</h3>
+                        <ul className="list-none p-0 space-y-4">
+                            {system.planets.map(planet => (
+                                <li key={planet.planetId}>
+                                    <strong style={{ color: planet.planetColor }}>{planet.planetName}</strong>
+                                    <span className="text-xs text-gray-500 ml-2">({planet.planetType})</span>
+                                    <p className="text-xs mt-1 ml-2 text-gray-400">Moons: {planet.moons.length}</p>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+
+                    <button
+                        onClick={onClose}
+                        className="absolute bottom-5 left-5 right-5 py-3 px-4 bg-gray-800/80 border border-gray-600 rounded-lg hover:bg-gray-700 transition-colors"
+                    >
+                        Back to Galaxy
+                    </button>
+                </>
+            )}
         </div>
     );
 };
