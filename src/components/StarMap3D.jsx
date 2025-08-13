@@ -12,6 +12,8 @@ const StarMap3D = () => {
     const [hoveredStar, setHoveredStar] = useState(null);
     const [selectedStar, setSelectedStar] = useState(null);
     const [activeSystemDetails, setActiveSystemDetails] = useState(null);
+    const [hoveredPlanet, setHoveredPlanet] = useState(null);
+    const [homeSystem, setHomeSystem] = useState(null);
 
     const sceneRef = useRef(null);
     const cameraRef = useRef(null);
@@ -19,10 +21,17 @@ const StarMap3D = () => {
     const controlsRef = useRef(null);
     const starMeshes = useRef([]);
     const planetMeshes = useRef([]);
+    const planetGroups = useRef([]);
     const orbitLines = useRef([]);
     const loadedSectors = useRef(new Set());
     const animationFrameId = useRef(null);
     const lastCameraPosition = useRef(new THREE.Vector3());
+
+    // Load home system from localStorage on mount
+    useEffect(() => {
+        const savedHome = localStorage.getItem('homeSystem');
+        if (savedHome) setHomeSystem(JSON.parse(savedHome));
+    }, []);
 
     const fetchStarsForSector = useCallback(async (sectorX, sectorY, sectorZ) => {
         const sectorId = `${sectorX},${sectorY},${sectorZ}`;
@@ -82,9 +91,7 @@ const StarMap3D = () => {
         renderer.setSize(window.innerWidth, window.innerHeight);
         mountRef.current.appendChild(renderer.domElement);
 
-        // --- FIX: Add an ambient light to the scene ---
-        // This provides a soft, global light so planets are not black.
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.2);
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
         scene.add(ambientLight);
 
         const controls = new OrbitControls(camera, renderer.domElement);
@@ -109,13 +116,13 @@ const StarMap3D = () => {
                 }
             });
 
-            planetMeshes.current.forEach(planet => {
-                planet.userData.angle += planet.userData.speed * delta;
-                const starPos = planet.userData.starPosition;
-                planet.position.x = starPos.x + Math.cos(planet.userData.angle) * planet.userData.orbitRadius;
-                planet.position.y = starPos.y;
-                planet.position.z = starPos.z + Math.sin(planet.userData.angle) * planet.userData.orbitRadius;
-                planet.rotation.y += 0.05;
+            planetGroups.current.forEach(group => {
+                group.userData.angle += group.userData.speed * delta;
+                const starPos = group.userData.starPosition;
+                group.position.x = starPos.x + Math.cos(group.userData.angle) * group.userData.orbitRadius;
+                group.position.y = starPos.y;
+                group.position.z = starPos.z + Math.sin(group.userData.angle) * group.userData.orbitRadius;
+                group.rotation.y += 0.05;
             });
 
             controls.update();
@@ -128,6 +135,7 @@ const StarMap3D = () => {
             const sectorX = Math.floor(x / SECTOR_SIZE);
             const sectorY = Math.floor(y / SECTOR_SIZE);
             const sectorZ = Math.floor(z / SECTOR_SIZE);
+
             for (let i = -1; i <= 1; i++) {
                 for (let j = -1; j <= 1; j++) {
                     fetchStarsForSector(sectorX + i, sectorY + j, sectorZ);
@@ -136,12 +144,7 @@ const StarMap3D = () => {
         };
         controls.addEventListener('end', onCameraMoveEnd);
 
-        const initialSectorX = 0, initialSectorY = 0, initialSectorZ = 0;
-        for (let i = -1; i <= 1; i++) {
-            for (let j = -1; j <= 1; j++) {
-                fetchStarsForSector(initialSectorX + i, initialSectorY + j, initialSectorZ);
-            }
-        }
+        onCameraMoveEnd();
 
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
@@ -150,12 +153,24 @@ const StarMap3D = () => {
             mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
             mouse.y = - (event.clientY / window.innerHeight) * 2 + 1;
             raycaster.setFromCamera(mouse, camera);
-            const intersects = raycaster.intersectObjects(starMeshes.current);
+
+            const allMeshes = [...starMeshes.current, ...planetMeshes.current];
+            const intersects = raycaster.intersectObjects(allMeshes);
+
             if (intersects.length > 0) {
-                const starData = intersects[0].object.userData;
-                setHoveredStar({ ...starData, screenX: event.clientX, screenY: event.clientY });
+                const intersectedObject = intersects[0].object;
+                const data = intersectedObject.userData;
+
+                if (data.isPlanet) {
+                    setHoveredPlanet({ ...data, screenX: event.clientX, screenY: event.clientY });
+                    setHoveredStar(null);
+                } else {
+                    setHoveredStar({ ...data, screenX: event.clientX, screenY: event.clientY });
+                    setHoveredPlanet(null);
+                }
             } else {
                 setHoveredStar(null);
+                setHoveredPlanet(null);
             }
         };
 
@@ -172,8 +187,24 @@ const StarMap3D = () => {
             }
         };
 
+        const handleContextMenu = (event) => {
+            event.preventDefault();
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = - (event.clientY / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(starMeshes.current);
+
+            if (intersects.length > 0) {
+                const starData = intersects[0].object.userData;
+                setHomeSystem(starData);
+                localStorage.setItem('homeSystem', JSON.stringify(starData));
+                console.log("Home system set to:", starData.name);
+            }
+        };
+
         window.addEventListener('mousemove', handleMouseMove);
         window.addEventListener('click', handleMouseClick);
+        window.addEventListener('contextmenu', handleContextMenu);
 
         const handleResize = () => {
             camera.aspect = window.innerWidth / window.innerHeight;
@@ -189,6 +220,7 @@ const StarMap3D = () => {
             window.removeEventListener('resize', handleResize);
             window.removeEventListener('mousemove', handleMouseMove);
             window.removeEventListener('click', handleMouseClick);
+            window.removeEventListener('contextmenu', handleContextMenu);
             renderer.dispose();
             if (currentMount) {
                 currentMount.removeChild(renderer.domElement);
@@ -270,7 +302,8 @@ const StarMap3D = () => {
         const scene = sceneRef.current;
         if (!scene) return;
 
-        planetMeshes.current.forEach(planetMesh => scene.remove(planetMesh));
+        planetGroups.current.forEach(group => scene.remove(group));
+        planetGroups.current = [];
         planetMeshes.current = [];
         orbitLines.current.forEach(line => scene.remove(line));
         orbitLines.current = [];
@@ -280,15 +313,27 @@ const StarMap3D = () => {
 
             activeSystemDetails.planets.forEach(planetData => {
                 const orbitRadius = planetData.orbitRadius * 1.5;
-                const planetGeometry = new THREE.SphereGeometry(planetData.planetSize * 0.2, 16, 16);
-                const planetMaterial = new THREE.MeshStandardMaterial({
+                const planetSize = planetData.planetSize * 0.2;
+                const planetGeometry = new THREE.SphereGeometry(planetSize, 16, 16);
+
+                const planetMaterial = new THREE.MeshBasicMaterial({
                     color: planetData.planetColor,
-                    roughness: 0.8,
-                    metalness: 0.1
                 });
                 const planetMesh = new THREE.Mesh(planetGeometry, planetMaterial);
+                planetMesh.userData = { ...planetData, isPlanet: true };
 
-                planetMesh.userData = {
+                const outlineMaterial = new THREE.MeshBasicMaterial({
+                    color: 0x000000,
+                    side: THREE.BackSide
+                });
+                const outlineMesh = new THREE.Mesh(planetGeometry, outlineMaterial);
+                outlineMesh.scale.multiplyScalar(1.15);
+
+                const planetGroup = new THREE.Group();
+                planetGroup.add(outlineMesh);
+                planetGroup.add(planetMesh);
+
+                planetGroup.userData = {
                     orbitRadius: orbitRadius,
                     speed: (Math.random() * 0.2 + 0.05) / (orbitRadius / 50),
                     angle: Math.random() * Math.PI * 2,
@@ -304,8 +349,9 @@ const StarMap3D = () => {
                 orbitLine.rotation.x = Math.PI / 2;
 
                 scene.add(orbitLine);
-                scene.add(planetMesh);
+                scene.add(planetGroup);
                 orbitLines.current.push(orbitLine);
+                planetGroups.current.push(planetGroup);
                 planetMeshes.current.push(planetMesh);
             });
         }
@@ -332,6 +378,16 @@ const StarMap3D = () => {
                 }
             };
             animateReturn();
+        }
+    };
+
+    // --- NEW: flyHome function ---
+    const flyHome = () => {
+        if (homeSystem) {
+            setSelectedStar(homeSystem);
+        } else {
+            // Using a simple alert for now. Could be a more elegant UI element.
+            alert("No home system set! Right-click a star to set it as your home.");
         }
     };
 
@@ -367,7 +423,28 @@ const StarMap3D = () => {
                     {hoveredStar.name}
                 </div>
             )}
+            {hoveredPlanet && (
+                <div style={{
+                    position: 'absolute',
+                    left: hoveredPlanet.screenX + 15,
+                    top: hoveredPlanet.screenY + 15,
+                    color: 'white',
+                    backgroundColor: 'rgba(0,0,0,0.7)',
+                    padding: '5px 10px',
+                    borderRadius: '5px',
+                    pointerEvents: 'none',
+                    fontFamily: 'monospace'
+                }}>
+                    {hoveredPlanet.planetName}
+                </div>
+            )}
             <SystemDetailPanel system={activeSystemDetails} onClose={returnToGalaxyView} />
+            {/* --- RE-ADDED UIPanel --- */}
+            {/* <UIPanel
+                onFlyHome={flyHome}
+                stars={stars}
+                cameraPosition={cameraRef.current?.position || new THREE.Vector3()}
+            /> */}
         </div>
     );
 };
