@@ -280,7 +280,7 @@ const StarMap3D = () => {
         if (selectedStar && camera && controls) {
             fetchSystemDetails(selectedStar);
             const targetPosition = new THREE.Vector3(selectedStar.x, selectedStar.y, selectedStar.z);
-            const cameraTargetPosition = targetPosition.clone().add(new THREE.Vector3(0, 80, 50));
+            const cameraTargetPosition = targetPosition.clone().add(new THREE.Vector3(0, 80, 100));
             const startPosition = camera.position.clone();
             const startTarget = controls.target.clone();
             let t = 0;
