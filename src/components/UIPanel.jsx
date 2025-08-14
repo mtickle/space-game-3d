@@ -57,7 +57,7 @@ const UIPanel = ({ onFlyHome, stars, cameraPosition }) => {
             >
                 Fly Home
             </button>
-            <MiniMap stars={stars} cameraPosition={cameraPosition} />
+            {/* <MiniMap stars={stars} cameraPosition={cameraPosition} /> */}
         </div>
     );
 };

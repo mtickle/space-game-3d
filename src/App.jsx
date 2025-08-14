@@ -11,7 +11,7 @@ function App() {
   const [modalMessage, setModalMessage] = useState('');
   useEffect(() => {
     const wakeUpApi = async () => {
-      setModalMessage("Waking up the API because I'm cheap... 😴");
+      setModalMessage("{{--- CONTACTING GALACTIC CARTOGRAPHY SERVERS ---}}");
       setIsModalOpen(true);
 
       try {

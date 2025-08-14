@@ -1,7 +1,7 @@
+import Footer from '@layouts/Footer'; // --- NEW: Import the Footer
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
-import { createFlareTexture, createGlowTexture, createSeamlessStarTexture } from '../utils/textureUtils';
 import SystemDetailPanel from './SystemDetailPanel';
 
 const SECTOR_SIZE = 500;
@@ -19,15 +19,63 @@ const StarMap3D = () => {
     const cameraRef = useRef(null);
     const rendererRef = useRef(null);
     const controlsRef = useRef(null);
-    const starMeshes = useRef([]);
-    const planetMeshes = useRef([]);
+    const starGroups = useRef({});
     const planetGroups = useRef([]);
+    const planetMeshes = useRef([]);
     const orbitLines = useRef([]);
     const loadedSectors = useRef(new Set());
     const animationFrameId = useRef(null);
     const lastCameraPosition = useRef(new THREE.Vector3());
 
-    // Load home system from localStorage on mount
+    // --- Your custom texture functions ---
+    function createProceduralStarTexture(color) {
+        const size = 256;
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = new THREE.Color(color).getStyle();
+        ctx.fillRect(0, 0, size, size);
+        for (let y = 0; y < size; y++) {
+            for (let x = 0; x < size; x++) {
+                const value = Math.floor(Math.random() * 50);
+                ctx.fillStyle = `rgba(${value},${value},${value},${0.15 + Math.random() * 0.15})`;
+                ctx.fillRect(x, y, 1, 1);
+            }
+        }
+        return new THREE.CanvasTexture(canvas);
+    }
+
+    function createFlareTexture() {
+        const size = 256;
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+        gradient.addColorStop(0, 'rgba(255,255,255,0.4)');
+        gradient.addColorStop(0.5, 'rgba(255,200,50,0.2)');
+        gradient.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+        ctx.fill();
+        return new THREE.CanvasTexture(canvas);
+    }
+
+    function createGlowTexture(color) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 128;
+        canvas.height = 128;
+        const context = canvas.getContext('2d');
+        const gradient = context.createRadialGradient(64, 64, 0, 64, 64, 64);
+        const starColor = new THREE.Color(color);
+        gradient.addColorStop(0.0, 'rgba(255, 255, 255, 0.8)');
+        gradient.addColorStop(0.3, `rgba(${starColor.r * 255}, ${starColor.g * 255}, ${starColor.b * 255}, 0.5)`);
+        gradient.addColorStop(1.0, 'rgba(0,0,0,0)');
+        context.fillStyle = gradient;
+        context.fillRect(0, 0, 128, 128);
+        return new THREE.CanvasTexture(canvas);
+    }
+
     useEffect(() => {
         const savedHome = localStorage.getItem('homeSystem');
         if (savedHome) setHomeSystem(JSON.parse(savedHome));
@@ -46,7 +94,8 @@ const StarMap3D = () => {
             });
             if (!response.ok) throw new Error(`Network error for sector ${sectorId}`);
             const newStars = await response.json();
-            setStars(prevStars => [...prevStars, ...newStars]);
+            const starsWithSector = newStars.map(star => ({ ...star, sectorId }));
+            setStars(prevStars => [...prevStars, ...starsWithSector]);
         } catch (error) {
             console.error(`Failed to fetch stars for sector ${sectorId}:`, error);
             loadedSectors.current.delete(sectorId);
@@ -58,10 +107,7 @@ const StarMap3D = () => {
         try {
             const apiKey = import.meta.env.VITE_API_KEY;
             const baseUrl = import.meta.env.VITE_API_BASE_URL;
-            let response = await fetch(`${baseUrl}/api/v1/systems/${star.id}`, {
-                headers: { 'x-api-key': apiKey }
-            });
-
+            let response = await fetch(`${baseUrl}/api/v1/systems/${star.id}`, { headers: { 'x-api-key': apiKey } });
             if (response.status === 404) {
                 response = await fetch(`${baseUrl}/api/v1/systems`, {
                     method: 'POST',
@@ -69,7 +115,6 @@ const StarMap3D = () => {
                     body: JSON.stringify(star),
                 });
             }
-
             if (!response.ok) throw new Error('Failed to fetch or create system details');
             const fullSystem = await response.json();
             setActiveSystemDetails(fullSystem);
@@ -108,12 +153,11 @@ const StarMap3D = () => {
             animationFrameId.current = requestAnimationFrame(animate);
             const delta = clock.getDelta();
 
-            starMeshes.current.forEach(starMesh => {
+            Object.values(starGroups.current).forEach(group => {
+                const starMesh = group.children[0];
                 starMesh.rotation.y += 0.05 * delta;
-                if (starMesh.parent) {
-                    const flare = starMesh.parent.children.find(c => c.userData?.isFlare);
-                    if (flare) flare.rotation.y -= 0.02 * delta;
-                }
+                const flare = group.children.find(c => c.userData?.isFlare);
+                if (flare) flare.rotation.y -= 0.02 * delta;
             });
 
             planetGroups.current.forEach(group => {
@@ -132,19 +176,15 @@ const StarMap3D = () => {
 
         const onCameraMoveEnd = () => {
             const { x, y, z } = camera.position;
-            const sectorX = Math.floor(x / SECTOR_SIZE);
-            const sectorY = Math.floor(y / SECTOR_SIZE);
-            const sectorZ = Math.floor(z / SECTOR_SIZE);
+            const currentSectorX = Math.floor(x / SECTOR_SIZE);
+            const currentSectorY = Math.floor(y / SECTOR_SIZE);
+            const currentSectorZ = Math.floor(z / SECTOR_SIZE);
 
-            for (let i = -1; i <= 1; i++) {
-                for (let j = -1; j <= 1; j++) {
-                    fetchStarsForSector(sectorX + i, sectorY + j, sectorZ);
-                }
-            }
+            fetchStarsForSector(currentSectorX, currentSectorY, currentSectorZ);
         };
         controls.addEventListener('end', onCameraMoveEnd);
 
-        onCameraMoveEnd();
+        fetchStarsForSector(0, 0, -1);
 
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
@@ -153,24 +193,14 @@ const StarMap3D = () => {
             mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
             mouse.y = - (event.clientY / window.innerHeight) * 2 + 1;
             raycaster.setFromCamera(mouse, camera);
-
-            const allMeshes = [...starMeshes.current, ...planetMeshes.current];
-            const intersects = raycaster.intersectObjects(allMeshes);
+            const meshes = Object.values(starGroups.current).map(g => g.children[0]);
+            const intersects = raycaster.intersectObjects(meshes);
 
             if (intersects.length > 0) {
-                const intersectedObject = intersects[0].object;
-                const data = intersectedObject.userData;
-
-                if (data.isPlanet) {
-                    setHoveredPlanet({ ...data, screenX: event.clientX, screenY: event.clientY });
-                    setHoveredStar(null);
-                } else {
-                    setHoveredStar({ ...data, screenX: event.clientX, screenY: event.clientY });
-                    setHoveredPlanet(null);
-                }
+                const starData = intersects[0].object.userData;
+                setHoveredStar({ ...starData, screenX: event.clientX, screenY: event.clientY });
             } else {
                 setHoveredStar(null);
-                setHoveredPlanet(null);
             }
         };
 
@@ -178,7 +208,8 @@ const StarMap3D = () => {
             mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
             mouse.y = - (event.clientY / window.innerHeight) * 2 + 1;
             raycaster.setFromCamera(mouse, camera);
-            const intersects = raycaster.intersectObjects(starMeshes.current);
+            const meshes = Object.values(starGroups.current).map(g => g.children[0]);
+            const intersects = raycaster.intersectObjects(meshes);
 
             if (intersects.length > 0) {
                 const starData = intersects[0].object.userData;
@@ -192,13 +223,13 @@ const StarMap3D = () => {
             mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
             mouse.y = - (event.clientY / window.innerHeight) * 2 + 1;
             raycaster.setFromCamera(mouse, camera);
-            const intersects = raycaster.intersectObjects(starMeshes.current);
+            const meshes = Object.values(starGroups.current).map(g => g.children[0]);
+            const intersects = raycaster.intersectObjects(meshes);
 
             if (intersects.length > 0) {
                 const starData = intersects[0].object.userData;
                 setHomeSystem(starData);
                 localStorage.setItem('homeSystem', JSON.stringify(starData));
-                console.log("Home system set to:", starData.name);
             }
         };
 
@@ -232,14 +263,14 @@ const StarMap3D = () => {
         const scene = sceneRef.current;
         if (!scene) return;
 
-        const currentStarIds = new Set(starMeshes.current.map(mesh => mesh.userData.id));
+        const currentStarIds = new Set(Object.keys(starGroups.current));
         const newStars = stars.filter(star => !currentStarIds.has(star.id));
 
         newStars.forEach(starData => {
             const starGroup = new THREE.Group();
             const starGeometry = new THREE.SphereGeometry(starData.size, 32, 32);
             const starMaterial = new THREE.MeshBasicMaterial({
-                map: createSeamlessStarTexture(starData.color),
+                map: createProceduralStarTexture(starData.color),
             });
             const starMesh = new THREE.Mesh(starGeometry, starMaterial);
             starMesh.userData = starData;
@@ -268,8 +299,17 @@ const StarMap3D = () => {
             starGroup.position.set(starData.x, starData.y, starData.z);
 
             scene.add(starGroup);
-            starMeshes.current.push(starMesh);
+            starGroups.current[starData.id] = starGroup;
         });
+
+        const starIdsInState = new Set(stars.map(s => s.id));
+        Object.keys(starGroups.current).forEach(id => {
+            if (!starIdsInState.has(id)) {
+                scene.remove(starGroups.current[id]);
+                delete starGroups.current[id];
+            }
+        });
+
     }, [stars]);
 
 
@@ -316,22 +356,16 @@ const StarMap3D = () => {
                 const planetSize = planetData.planetSize * 0.2;
                 const planetGeometry = new THREE.SphereGeometry(planetSize, 16, 16);
 
-                const planetMaterial = new THREE.MeshBasicMaterial({
-                    color: planetData.planetColor,
-                });
+                const planetMaterial = new THREE.MeshBasicMaterial({ color: planetData.planetColor });
                 const planetMesh = new THREE.Mesh(planetGeometry, planetMaterial);
                 planetMesh.userData = { ...planetData, isPlanet: true };
 
-                const outlineMaterial = new THREE.MeshBasicMaterial({
-                    color: 0x000000,
-                    side: THREE.BackSide
-                });
+                const outlineMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
                 const outlineMesh = new THREE.Mesh(planetGeometry, outlineMaterial);
                 outlineMesh.scale.multiplyScalar(1.15);
 
                 const planetGroup = new THREE.Group();
-                planetGroup.add(outlineMesh);
-                planetGroup.add(planetMesh);
+                planetGroup.add(outlineMesh, planetMesh);
 
                 planetGroup.userData = {
                     orbitRadius: orbitRadius,
@@ -348,8 +382,7 @@ const StarMap3D = () => {
                 orbitLine.position.copy(starPosition);
                 orbitLine.rotation.x = Math.PI / 2;
 
-                scene.add(orbitLine);
-                scene.add(planetGroup);
+                scene.add(orbitLine, planetGroup);
                 orbitLines.current.push(orbitLine);
                 planetGroups.current.push(planetGroup);
                 planetMeshes.current.push(planetMesh);
@@ -381,12 +414,10 @@ const StarMap3D = () => {
         }
     };
 
-    // --- NEW: flyHome function ---
     const flyHome = () => {
         if (homeSystem) {
             setSelectedStar(homeSystem);
         } else {
-            // Using a simple alert for now. Could be a more elegant UI element.
             alert("No home system set! Right-click a star to set it as your home.");
         }
     };
@@ -439,12 +470,14 @@ const StarMap3D = () => {
                 </div>
             )}
             <SystemDetailPanel system={activeSystemDetails} onClose={returnToGalaxyView} />
-            {/* --- RE-ADDED UIPanel --- */}
-            {/* <UIPanel
+
+            {/* --- NEW: Render the Footer --- */}
+            <Footer
+                camera={cameraRef.current}
+                controls={controlsRef.current}
                 onFlyHome={flyHome}
                 stars={stars}
-                cameraPosition={cameraRef.current?.position || new THREE.Vector3()}
-            /> */}
+            />
         </div>
     );
 };
